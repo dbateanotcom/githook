@@ -9,7 +9,7 @@ use Symfony\Component\HttpFoundation\RequestStack;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Psr\Log\LoggerInterface;
 
-class ClientUploadProfileImage extends AbstractController
+class GitHook extends AbstractController
 {
 
     /**
@@ -24,6 +24,7 @@ class ClientUploadProfileImage extends AbstractController
         LoggerInterface $logger
     ): Response {
 
+        //$_ENV['GITHUB_WEBHOOK_SECRET']
         $content = \json_decode($requestStack->getCurrentRequest()->getContent(), true);
         ob_start();
         var_dump($content);
