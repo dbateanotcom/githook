@@ -2,6 +2,7 @@
 
 namespace App\Controller;
 
+use App\Service\GitService;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\Routing\Annotation\Route;
@@ -21,76 +22,71 @@ class GitHook extends AbstractController
      */
     public function webhook(
         RequestStack $requestStack,
-        LoggerInterface $logger
+        LoggerInterface $logger,
+        GitService $gitService
     ): Response {
 
-        $post = \json_decode(
-            $requestStack->getCurrentRequest()->getContent(),
-            true
-        );
+        $request = $requestStack->getCurrentRequest();
+        $signature = $request->headers->get('X-Hub-Signature-256');
+        $content = $request->getContent();
 
-        if (
-            $post['hook']['config']['sectret']
-            !==
-            $_ENV['GITHUB_WEBHOOK_SECRET']
-        ) {
-        } {
+        if(
+            $signature 
+            != 
+            ( "sha256=" . hash_hmac(
+                "sha256", 
+                $content,
+                $_ENV['GITHUB_WEBHOOK_SECRET'],
+                false
+                )
+            )
+        ){
+            $logger->info('GitHook: Unauthorized');
             throw new UnauthorizedHttpException('Unauthorized');
         }
 
-        $projects = $this->findGitProjects($_ENV['REPOSITORIES_PATH']);
+        
+        $post = \json_decode(
+            $content,
+            true
+        );
 
-        foreach ($projects as $p) {
-            $projectConfig = parse_ini_file($p . '/.git/config');
+        if(
+            isset($post['ref'])
+            &&
+            isset($post['repository'])
+        ){
 
-            if (
-                $projectConfig['url'] == $post['repository']['git_url'] ||
-                $projectConfig['url'] == $post['repository']['ssh_url'] ||
-                $projectConfig['url'] == $post['repository']['clone_url']
-            ) {
-                $response = $this->performGitPull($p);
-
-                $logger->info('GitHook: ' . implode("\n", $response));
+            $logger->info('GitHook: ' . $post['repositoy']['full_name']);
+        
+            $projects = $gitService->findRespositories($_ENV['REPOSITORIES_PATH']);
+        
+            $found  = false;
+            foreach ($projects as $p) {
+                $url = $p->getUrl();
+    
+                if (
+                    ( 
+                      $url == $post['repository']['git_url'] ||
+                      $url == $post['repository']['ssh_url'] ||
+                      $url == $post['repository']['clone_url']
+                    )
+                    &&
+                    $p->getUpstreamRef() == $post['ref'] 
+                ) {
+                    $found = true;
+                    $response = $p->pull();
+                    $logger->info('GitHook: Pulled ' . $post['repositoy']['full_name'] . ",\n" . implode("\n", $response));
+                }
             }
+    
+            if (!$found) {
+                $logger->info('GitHook: ' . $post['repositoy']['full_name'] . ' not found');
+            }
+    
         }
 
         return new Response('', Response::HTTP_NO_CONTENT);
     }
 
-
-    private function findGitProjects($path)
-    {
-        $iterator = new \DirectoryIterator($path, \RecursiveDirectoryIterator::SKIP_DOTS);
-        foreach ($iterator as $item) {
-            if (
-                $item->isDir() &&
-                $item->getFilename() === '.git' &&
-                file_exists($item->getPathname() . '/config')
-            ) {
-                return [$path];
-            }
-        }
-
-        $paths = [];
-        foreach ($iterator as $item) {
-            if ($item->isDir()) {
-
-                $paths = array_merge(
-                    $paths,
-                    $this->findGitProjects($item->getPathname())
-                );
-            }
-        }
-
-        return $paths;
-    }
-
-
-
-    private function performGitPull($path)
-    {
-        $output = [];
-        exec('git -C ' . $path . ' pull', $output);
-        return $output;
-    }
 }
